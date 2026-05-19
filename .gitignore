@@ -11,6 +11,7 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+reports/
 *.egg-info/
 
 # --- 环境配置 ---
