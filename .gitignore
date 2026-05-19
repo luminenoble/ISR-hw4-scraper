@@ -1,0 +1,48 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# --- 环境配置 ---
+.env
+.env.local
+*.local
+
+# --- 数据 ---
+data/snapshots/*
+!data/snapshots/.gitkeep
+data/graph/*
+!data/graph/.gitkeep
+data/raw/
+data/cache/
+
+# --- 日志 ---
+logs/
+*.log
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# --- Scrapy ---
+.scrapy/
+
+# --- Node ---
+node_modules/
+dist/
+
+# --- docs ---
+CLAUDE.md
+design.md
