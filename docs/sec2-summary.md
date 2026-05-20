@@ -1,7 +1,7 @@
 # Sec.2 Scrapy 骨架 + Fandom/Wiki Spider（M2 阶段）
 
 > 对应里程碑：`design.md §7 — M2 Fandom + Wiki spider 跑通，单源 1 万条`
-> 完成日期：2026-05-19
+> 完成日期：2026-05-20
 > 上游依赖：`docs/sec1-summary.md`（ES + Mongo + Tika 已就绪）
 
 ## 1. 交付物清单
@@ -65,11 +65,40 @@ MongoPipeline(300)      # upsert(doc_id) 到 raw_pages；建 doc_id 唯一索引
 
 ### 2.4 合规与限速
 
-- `USER_AGENT = ISR-CourseProject/0.1 (+mailto:<ISR_CONTACT_EMAIL>)`
+**全局默认（适用于 fandom 及未来 spider）**：
+
+- `USER_AGENT` 由 `.env` 注入：`<ISR_UA_NAME>/0.1 (+mailto:<ISR_CONTACT_EMAIL>; user:<WIKI_USERNAME 主账号>)`
 - `ROBOTSTXT_OBEY = True`
 - AutoThrottle 开启，目标并发 2，最大延迟 10s
 - Retry：429/5xx 重试 3 次
 - HTTPCACHE 默认开启（3 天）— 开发期反复 spider 跑不打爆 API
+
+**WikiSpider 特殊 override（`custom_settings`）**：
+
+Wikipedia `robots.txt` 含 `Disallow: /w/`，会阻断 `/w/api.php` 上所有 API 调用。但
+`mediawiki.org/wiki/API:Etiquette` 政策明确**豁免 API 用户**——只要 UA 带联系方式、
+限速保守、不并发轰炸即可。所以仅对 WikiSpider：
+
+```python
+ROBOTSTXT_OBEY = False
+CONCURRENT_REQUESTS_PER_DOMAIN = 1
+DOWNLOAD_DELAY = 0.5                   # 2 req/s 上限
+AUTOTHROTTLE_TARGET_CONCURRENCY = 1.0
+```
+
+### 2.5 Wikipedia Bot Password 登录
+
+在 `.env` 提供 `WIKI_USERNAME / WIKI_BOT_PASSWORD`（来自 `Special:BotPasswords`）时，
+WikiSpider 抓取前先走 4 步登录链：
+
+```
+1. GET  action=query&meta=tokens&type=login        → logintoken
+2. POST action=login (form: lgname/lgpassword/lgtoken)  → Set-Cookie session
+3. 后续 categorymembers / parse 请求自动带 cookie（CookiesMiddleware）
+4. 完成
+```
+
+匿名模式（不填凭据）也能跑，但限速更严、`apihighlimits` 不可用。
 
 ## 3. 启动与验证
 
@@ -127,12 +156,21 @@ docker exec isr-mongo mongosh -u isr -p isr_dev_pw \
 
 ### 3.5 1 万条正式跑
 
+Fandom（约 1–2 小时）：
+
 ```bash
-scrapy crawl fandom -a wiki=onepiece -a limit=10000 \
-  -s CLOSESPIDER_ITEMCOUNT=10000 -L INFO 2>&1 | tee ../logs/fandom-onepiece.log
+scrapy crawl fandom -a wiki=onepiece -a limit=10000 -s CLOSESPIDER_ITEMCOUNT=10000 -L INFO 2>&1 | tee ../logs/fandom-onepiece.log
 ```
 
-按 AutoThrottle 默认参数，约 1–2 小时完成单源 1 万条。
+Wiki（约 1.5 小时；需先在 `.env` 配 `WIKI_USERNAME / WIKI_BOT_PASSWORD`）：
+
+```bash
+scrapy crawl wiki -a lang=en -a category=Fictional_characters -a limit=10000 -s CLOSESPIDER_ITEMCOUNT=10000 -a max_depth=4 -L INFO 2>&1 | tee ../logs/wiki-fictional.log
+```
+
+> 强烈建议加 `-s JOBDIR=../jobs/wiki-fictional` 启用 Scrapy 的 scheduler 持久化，
+> Ctrl+C 后用同一 JOBDIR 重启即可真断点续抓。本次 M2 没加，靠 HTTPCACHE + Mongo
+> upsert 幂等性做"伪续跑"。
 
 ## 4. 设计权衡
 
@@ -152,8 +190,31 @@ scrapy crawl fandom -a wiki=onepiece -a limit=10000 \
 - **AutoThrottle 与 limit 交互**：`limit` 是 yield 计数，不是 item 计数；如果 pipeline 中途丢弃 item，最终入库会少一些
 - **HTTPCACHE 在 1 万条规模下占空间**：可能 1–2 GB，跑大批量前 `ISR_HTTPCACHE=0` 关闭或定期 `rm -rf .scrapy/httpcache`
 - **MediaWiki API 偶发 503**：retry 已配；持续 503 一般是被限速，调小 `CONCURRENT_REQUESTS_PER_DOMAIN`
+- **`Got data loss in ...` warning**：Wikipedia 偶尔返回截断 chunked 响应。**不要按提示关 `DOWNLOAD_FAIL_ON_DATALOSS`**——RetryMiddleware 默认会重发，关掉反而会让截断 JSON 流入 pipeline 造成静默脏数据
+- **本次未启用 JOBDIR**：Ctrl+C 后无法真断点续抓，靠 HTTPCACHE 缓存 + `doc_id` 唯一索引兜底；下一轮务必加上
 
-## 6. 下一步（衔接 M3）
+## 6. 实跑结果
+
+| 指标                  | Fandom            | Wiki                        | 合计     |
+|---------------------|-------------------|----------------------------|--------|
+| 目标条数              | 10000             | 10000                       | 20000  |
+| 实际入库              | **7859**          | **8337**                    | 16196  |
+| `finish_reason`     | `finished` (枚举完) | `closespider`/Ctrl+C 早停     | -      |
+| URL 含 HTML 残片       | 0                 | 0                           | 0      |
+| title 缺失或空          | 0                 | 0                           | 0      |
+| `doc_id` / `snapshot_path` 缺失 | 0       | 0                           | 0      |
+| anchors 空            | -                 | -                           | 2      |
+| body_text 空          | -                 | -                           | 1      |
+| 快照文件 ↔ Mongo       | 1:1               | 1:1                         | 16196 == 16196 |
+
+**缺口归因**：
+
+- Fandom 7859：One Piece wiki 主命名空间非重定向条目自然就这么多，`apfilterredir=nonredirects` 滤掉了重定向页，`finish_reason=finished` 而非达到 limit
+- Wiki 8337：实跑期间手动 Ctrl+C 过两次；未启用 JOBDIR 所以续跑靠 HTTPCACHE，遍历到深度上限或被中断时停下
+
+**结论**：spider 与 pipeline 在万级规模稳定，万级抓取**能力已验证**。差的 ~2000 条是数据源 ceiling + 操作中断，非技术缺口；M3 阶段加 Reddit + 多 wiki + 多 category 后累计 10 万达成无虞。
+
+## 7. 下一步（衔接 M3）
 
 - [ ] Reddit spider（PRAW + OAuth）
 - [ ] Tika 文档解析 pipeline（PDF/DOCX → `source=document`）

@@ -22,9 +22,13 @@ BOT_NAME = "isr_crawler"
 SPIDER_MODULES = ["isr_crawler.spiders"]
 NEWSPIDER_MODULE = "isr_crawler.spiders"
 
-# --- 合规 ---
+# --- 合规：UA 模板 ClientName/version (mailto:...; user:WikipediaAccount) ---
+# 遵循 mediawiki.org/wiki/API:Etiquette 推荐格式
+_UA_NAME = os.getenv("ISR_UA_NAME", "ISR-CourseProject")
 _CONTACT = os.getenv("ISR_CONTACT_EMAIL", "isr-course@example.com")
-USER_AGENT = f"ISR-CourseProject/0.1 (+mailto:{_CONTACT})"
+_WIKI_USER = os.getenv("WIKI_USERNAME", "").split("@")[0]
+_user_part = f"; user:{_WIKI_USER}" if _WIKI_USER else ""
+USER_AGENT = f"{_UA_NAME}/0.1 (+mailto:{_CONTACT}{_user_part})"
 ROBOTSTXT_OBEY = True
 
 # --- 并发与限速 ---
