@@ -21,6 +21,17 @@ class FandomSpider(MediaWikiBaseSpider):
     name = "fandom"
     source = "fandom"
 
+    # 速率上限 ~3 req/s（Fandom 比 Wikipedia 宽容；ROBOTSTXT_OBEY 保持继承自全局 = True）
+    custom_settings = {
+        "CONCURRENT_REQUESTS": 3,
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 3,
+        "DOWNLOAD_DELAY": 0.33,
+        "AUTOTHROTTLE_ENABLED": True,
+        "AUTOTHROTTLE_START_DELAY": 0.5,
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": 3.0,
+        "AUTOTHROTTLE_MAX_DELAY": 10.0,
+    }
+
     def __init__(
         self,
         wiki: str = "onepiece",

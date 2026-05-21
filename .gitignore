@@ -39,6 +39,7 @@ logs/
 
 # --- Scrapy ---
 .scrapy/
+jobs/
 
 # --- Node ---
 node_modules/
