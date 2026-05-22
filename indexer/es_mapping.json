@@ -1,0 +1,70 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "index": {
+      "refresh_interval": "5s",
+      "max_result_window": 50000
+    },
+    "analysis": {
+      "analyzer": {
+        "default": {
+          "type": "standard"
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": false,
+    "properties": {
+      "doc_id": { "type": "keyword" },
+      "source": { "type": "keyword" },
+      "url": { "type": "keyword" },
+      "tag": { "type": "keyword" },
+      "character_name": {
+        "type": "text",
+        "analyzer": "standard",
+        "fields": {
+          "keyword": { "type": "keyword", "ignore_above": 256 }
+        }
+      },
+      "title": {
+        "type": "text",
+        "analyzer": "standard",
+        "fields": {
+          "en": { "type": "text", "analyzer": "english" },
+          "cjk": { "type": "text", "analyzer": "cjk" },
+          "keyword": { "type": "keyword", "ignore_above": 512 }
+        }
+      },
+      "anchors_text": {
+        "type": "text",
+        "analyzer": "standard",
+        "fields": {
+          "en": { "type": "text", "analyzer": "english" },
+          "cjk": { "type": "text", "analyzer": "cjk" }
+        }
+      },
+      "body": {
+        "type": "text",
+        "analyzer": "standard",
+        "fields": {
+          "en": { "type": "text", "analyzer": "english" },
+          "cjk": { "type": "text", "analyzer": "cjk" }
+        }
+      },
+      "infobox": { "type": "flattened" },
+      "popularity": { "type": "float" },
+      "pagerank":   { "type": "float" },
+      "obscurity":  { "type": "float" },
+      "fetched_at": { "type": "date" },
+      "snapshot_path": { "type": "keyword", "index": false, "doc_values": false },
+      "embedding": {
+        "type": "dense_vector",
+        "dims": 1024,
+        "index": true,
+        "similarity": "cosine"
+      }
+    }
+  }
+}

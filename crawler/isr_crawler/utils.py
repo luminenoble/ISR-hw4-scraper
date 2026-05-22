@@ -22,10 +22,15 @@ def now_iso_utc() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def snapshot_path_for(doc_id: str, base_dir: str | Path) -> Path:
-    """两级分桶 `ab/cd/<doc_id>.html.gz`，避免单目录文件过多。"""
+def snapshot_path_for(
+    doc_id: str, base_dir: str | Path, ext: str = "html.gz"
+) -> Path:
+    """两级分桶 `ab/cd/<doc_id>.<ext>`，避免单目录文件过多。
+
+    ``ext`` 用于区分网页快照（``html.gz``）与文档源（如 ``pdf.gz``）。
+    """
     base = Path(base_dir)
-    return base / doc_id[:2] / doc_id[2:4] / f"{doc_id}.html.gz"
+    return base / doc_id[:2] / doc_id[2:4] / f"{doc_id}.{ext}"
 
 
 def clean_text(html_or_text: str) -> str:
