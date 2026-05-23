@@ -11,8 +11,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from api.deps import INDEX_NAME, get_es, get_log_col
+from api.deps import INDEX_NAME, get_embedder, get_es, get_log_col
 from api.query_parser import ParsedQuery, parse
+from api.ranking import DEFAULT_W1, DEFAULT_W2, DEFAULT_W3, build_function_score
 from api.schemas import Hit, SearchResponse
 
 router = APIRouter(prefix="", tags=["search"])
@@ -38,8 +39,8 @@ def _build_filters(pq: ParsedQuery) -> list[dict[str, Any]]:
     return [{"term": {k: v}} for k, v in pq.filters.items()]
 
 
-def build_es_dsl(pq: ParsedQuery, size: int, from_: int) -> dict[str, Any]:
-    """根据 ParsedQuery.kind 拼 ES DSL。"""
+def _build_inner_query(pq: ParsedQuery) -> dict[str, Any]:
+    """根据 kind 拼 bool 查询（BM25 必含部分），filter 一并放在内层。"""
     must: list[dict[str, Any]] = []
 
     if pq.kind == "wildcard" and pq.wildcard:
@@ -83,21 +84,46 @@ def build_es_dsl(pq: ParsedQuery, size: int, from_: int) -> dict[str, Any]:
     if not must:
         must.append({"match_all": {}})
 
-    body: dict[str, Any] = {
+    return {"bool": {"must": must, "filter": _build_filters(pq)}}
+
+
+def build_es_dsl(
+    pq: ParsedQuery,
+    size: int,
+    from_: int,
+    alpha: float,
+    w1: float,
+    w2: float,
+    w3: float,
+    query_vector: list[float] | None,
+) -> dict[str, Any]:
+    """拼最终 ES 查询体：内层 BM25 + 外层 function_score 公式打分。"""
+    inner = _build_inner_query(pq)
+    use_emb = query_vector is not None
+    fs = build_function_score(
+        inner,
+        alpha=alpha,
+        w1=w1,
+        w2=w2,
+        w3=w3,
+        query_vector=query_vector,
+        use_embedding=use_emb,
+    )
+    return {
         "from": from_,
         "size": size,
         "_source": ["doc_id", "source", "url", "title", "tag"],
-        "query": {"bool": {"must": must, "filter": _build_filters(pq)}},
+        "query": fs,
         "highlight": {
             "fields": {
                 "body": {"fragment_size": 160, "number_of_fragments": 1},
                 "title": {"fragment_size": 80, "number_of_fragments": 1},
             },
+            "highlight_query": inner,  # 高亮基于原始 BM25 子句，避免 script_score 干扰
             "pre_tags": ["<em>"],
             "post_tags": ["</em>"],
         },
     }
-    return body
 
 
 def _hit_from_es(h: dict) -> Hit:
@@ -126,14 +152,41 @@ def search(
     from_: Annotated[int, Query(alias="from", ge=0)] = 0,
     source: str | None = Query(None, description="显式过滤 source（document 等）"),
     user_id: str | None = Query(None, description="用户 id，用于查询日志"),
+    alpha: Annotated[float, Query(ge=0.0, le=1.0, description="发散度 0=纯 BM25+PR / 1=纯语义")] = 0.0,
+    w1: float = DEFAULT_W1,
+    w2: float = DEFAULT_W2,
+    w3: float = DEFAULT_W3,
     es=Depends(get_es),
     log_col=Depends(get_log_col),
 ) -> SearchResponse:
     pq = parse(q)
-    # 显式 source 参数等价于 source: 前缀，方便前端做 "文档查询" tab
     if source:
         pq.filters["source"] = source
-    dsl = build_es_dsl(pq, size=size, from_=from_)
+
+    # alpha > 0 且模型已就绪时，对 q 编码一份 query_vector 参与语义项
+    query_vector: list[float] | None = None
+    if alpha > 0 and (pq.terms or pq.phrases):
+        embedder = get_embedder()
+        if embedder is not None:
+            seed = " ".join(pq.phrases + ([pq.terms] if pq.terms else [])).strip()
+            try:
+                vec = embedder.encode(
+                    [seed], normalize_embeddings=True, convert_to_numpy=True
+                )[0]
+                query_vector = vec.tolist()
+            except Exception as e:
+                logger.warning(f"query embed failed; alpha 路径降级: {e}")
+
+    dsl = build_es_dsl(
+        pq,
+        size=size,
+        from_=from_,
+        alpha=alpha,
+        w1=w1,
+        w2=w2,
+        w3=w3,
+        query_vector=query_vector,
+    )
 
     resp = es.search(index=INDEX_NAME, body=dsl)
     took = int(resp.get("took") or 0)
@@ -148,6 +201,7 @@ def search(
                 "query": q,
                 "kind": pq.kind,
                 "filters": pq.filters,
+                "alpha": alpha,
                 "ts": datetime.now(UTC).isoformat(timespec="seconds"),
                 "total": total,
                 "result_ids": [h.doc_id for h in hits],

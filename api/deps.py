@@ -39,9 +39,37 @@ def _mongo_uri() -> str:
 class State:
     es: Elasticsearch
     mongo: pymongo.MongoClient
+    _embedder: object | None = None  # 延迟加载的 bge-m3
+    _embedder_tried: bool = False  # True 后即使失败也不重试，避免每次请求加载 2GB
 
 
 state = State()
+
+
+def get_embedder() -> object | None:
+    """惰性加载 bge-m3。模型未下完 / 未配 BGE_M3_MODEL_PATH 时返回 None。
+
+    设计：第一次调用时尝试加载，失败则把 _embedder 置 None 并打日志，后续不再重试。
+    要在重新配置模型后启用，重启 uvicorn 即可。
+    """
+    if state._embedder_tried:
+        return state._embedder
+    state._embedder_tried = True
+    try:
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+
+        path = os.getenv("BGE_M3_MODEL_PATH", "BAAI/bge-m3")
+        if not Path(path).exists() and "/" not in path:
+            # 既不是本地路径也不像 hub id —— 保守 skip
+            logger.warning(f"embedder skipped: invalid model path {path}")
+            return None
+        logger.info(f"loading embedder from {path} (first request) ...")
+        state._embedder = SentenceTransformer(path)
+        logger.info("embedder ready")
+    except Exception as e:
+        logger.warning(f"embedder load failed; alpha 路径将降级: {e}")
+        state._embedder = None
+    return state._embedder
 
 
 @asynccontextmanager
