@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
+
 from api.query_parser import parse
 from api.ranking import build_function_score
-from api.routers.search import _build_inner_query, build_es_dsl
+from api.routers.search import _alpha_curve, _build_inner_query, build_es_dsl
 
 
 def test_inner_query_match():
@@ -87,6 +89,41 @@ def test_build_es_dsl_attaches_highlight_to_inner_not_function_score():
     )
     assert "highlight" in dsl
     assert dsl["highlight"]["highlight_query"]["bool"]["must"][0]["multi_match"]["query"] == "luffy"
+
+
+def test_alpha_curve_keeps_endpoints():
+    assert _alpha_curve(0.0) == 0.0
+    assert _alpha_curve(1.0) == 1.0
+
+
+def test_alpha_curve_keeps_midpoint():
+    # cos(π/2)=0 → 0.5*(1-0)=0.5
+    assert abs(_alpha_curve(0.5) - 0.5) < 1e-12
+
+
+def test_alpha_curve_is_monotonic():
+    xs = [i / 20 for i in range(21)]
+    ys = [_alpha_curve(x) for x in xs]
+    for a, b in zip(ys, ys[1:], strict=False):
+        assert a <= b
+
+
+def test_alpha_curve_stretches_middle_band():
+    """0.3↔0.7 区段映射后差值应**大于**线性时的差值（中间被拉开）。"""
+    eff_diff = _alpha_curve(0.7) - _alpha_curve(0.3)
+    linear_diff = 0.7 - 0.3
+    assert eff_diff > linear_diff
+
+
+def test_alpha_curve_clamps_out_of_range():
+    """实践中 FastAPI Query ge/le 兜底，但函数自身也要稳。"""
+    assert _alpha_curve(-0.1) == 0.0
+    assert _alpha_curve(1.5) == 1.0
+
+
+def test_alpha_curve_matches_formula():
+    for a in (0.1, 0.25, 0.45, 0.8):
+        assert abs(_alpha_curve(a) - 0.5 * (1 - math.cos(math.pi * a))) < 1e-12
 
 
 def test_filter_propagates_into_function_score_inner_query():

@@ -20,16 +20,16 @@ PREF_INIT = 0.1
 def boost_params_for(user: dict | None) -> dict[str, Any]:
     """从 user 文档抽出传给 build_function_score 的 PersonalBoost kwargs。
 
-    匿名用户（user=None）→ beta=0，等同关闭个性化。
-    用户禁用（default_beta=0）→ 同上。
+    语义分离（M9 修正）：
+        - "是否启用 PersonalBoost"：用户已登录即回填 pref_sources/tags/click_set
+        - "权重多大（beta）"：由调用方决定（URL > user.default_beta > 0）
+
+    匿名用户（user=None）→ 返回 beta=0 占位，调用方据此跳过个性化分支。
     """
     if not user:
         return {"beta": 0.0}
-    beta = float(user.get("default_beta", 0.0) or 0.0)
-    if beta <= 0:
-        return {"beta": 0.0}
     return {
-        "beta": beta,
+        "beta": float(user.get("default_beta", 0.0) or 0.0),
         "pref_sources": dict(user.get("preferred_sources") or {}),
         "pref_tags": dict(user.get("preferred_tag_weights") or {}),
         "click_set": list(user.get("click_doc_ids") or []),

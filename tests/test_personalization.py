@@ -22,9 +22,21 @@ def test_boost_params_anonymous_disables():
     assert boost_params_for(None) == {"beta": 0.0}
 
 
-def test_boost_params_zero_beta_disables():
-    user = {"default_beta": 0.0, "preferred_sources": {"fandom": 0.5}}
-    assert boost_params_for(user) == {"beta": 0.0}
+def test_boost_params_zero_beta_still_returns_prefs():
+    """M9 修：default_beta=0 不再短路。pref_sources 等仍要回填，
+    让 search router 可以用 URL ?beta=X 显式打开个性化而无需修改 profile。
+    """
+    user = {
+        "default_beta": 0.0,
+        "preferred_sources": {"fandom": 0.5},
+        "preferred_tag_weights": {"canon": 0.2},
+        "click_doc_ids": ["d1"],
+    }
+    pb = boost_params_for(user)
+    assert pb["beta"] == 0.0
+    assert pb["pref_sources"] == {"fandom": 0.5}
+    assert pb["pref_tags"] == {"canon": 0.2}
+    assert pb["click_set"] == ["d1"]
 
 
 def test_boost_params_full_user():
@@ -140,6 +152,34 @@ def test_function_score_personal_with_only_click_set():
     src = fs["function_score"]["script_score"]["script"]["source"]
     assert "double pb_term = 0.0;" not in src
     assert "params.click_set" in src
+
+
+def test_boost_params_keeps_prefs_when_default_beta_zero():
+    """M9 修：URL ?beta=X 要能覆盖 default_beta=0；pref 集合必须仍可用。"""
+    user = {
+        "default_beta": 0.0,
+        "preferred_sources": {"reddit": 1.0},
+        "preferred_tag_weights": {"fanon": 1.0},
+        "click_doc_ids": ["d1"],
+    }
+    pb = boost_params_for(user)
+    # search router 会用 URL beta 覆盖 pb["beta"]，所以这里 beta=0 不代表关闭
+    assert pb["pref_sources"] == {"reddit": 1.0}
+    assert pb["pref_tags"] == {"fanon": 1.0}
+    assert pb["click_set"] == ["d1"]
+    # 若调用方把 beta 覆盖为正值并传给 build_function_score，应进入 personal_src 分支
+    pb["beta"] = 2.0
+    fs = build_function_score(
+        _build_inner_query(parse("luffy")),
+        alpha=0.0, w1=1.0, w2=1.0, w3=1.0,
+        query_vector=None, use_embedding=False,
+        beta=pb["beta"],
+        pref_sources=pb["pref_sources"],
+        pref_tags=pb["pref_tags"],
+        click_set=pb["click_set"],
+    )
+    src = fs["function_score"]["script_score"]["script"]["source"]
+    assert "params.pref_sources" in src
 
 
 def test_function_score_personal_skipped_when_all_prefs_empty():

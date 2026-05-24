@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -46,6 +47,20 @@ _MATCH_FIELDS = [
 _PHRASE_FIELDS = ["title^3", "anchors_text^2", "body"]
 # 通配走 query_string，字段限定避免扫所有 keyword
 _WILDCARD_FIELDS = ["title", "url", "body"]
+
+
+def _alpha_curve(alpha: float) -> float:
+    """UI 上 [0,1] 的 α 映射到 script 用的 effective α。
+
+    余弦再映射 ``0.5 × (1 − cos(π·α))``：边界不变（0→0, 1→1, 0.5→0.5），
+    中点附近斜率最大（=π/2），把"中段切换不出感觉"那段陡峭化。
+    评测见 reports/eval_alpha.md（M8 修后重跑）。
+    """
+    if alpha <= 0.0:
+        return 0.0
+    if alpha >= 1.0:
+        return 1.0
+    return 0.5 * (1.0 - math.cos(math.pi * alpha))
 
 
 def _build_filters(pq: ParsedQuery) -> list[dict[str, Any]]:
@@ -192,23 +207,24 @@ def search(
     if beta is None:
         beta = float(current_user.get("default_beta", DEFAULT_BETA)) if current_user else 0.0
 
-    # 登录用户 → 抽 PersonalBoost kwargs；匿名 → beta=0
-    pb = boost_params_for(current_user) if beta > 0 else {"beta": 0.0}
-    # URL 显式 beta 覆盖档案的 default_beta，但 source/tag/click 集仍取自档案
+    # 登录用户 → 总是回填 pref_sources/tags/click_set；URL beta 决定权重
+    # 匿名用户 → 一律 beta=0
+    pb = boost_params_for(current_user)
     pb["beta"] = beta if current_user else 0.0
-    if not current_user:
-        pb.pop("pref_sources", None)
-        pb.pop("pref_tags", None)
-        pb.pop("click_set", None)
-    # 若 URL 强制 beta=0 但档案启用，要清掉 boost 字段免 script 误开
     if pb["beta"] <= 0:
+        # 关闭个性化：清掉 boost 字段免 script_score 误开 personal_src 分支
         pb = {"beta": 0.0}
 
     user_id = current_user["user_id"] if current_user else user_id
 
+    # α 非线性映射：UI 的 0..1 在传给 script 前过余弦曲线把中间区段拉开，
+    # 让 0.3↔0.7 区段不再高度黏合（M8 评测发现 Jaccard 高达 0.899）。
+    # 边界不变：eff(0)=0, eff(1)=1；中点附近斜率被拉大。
+    effective_alpha = _alpha_curve(alpha)
+
     # alpha > 0 且模型已就绪时，对 q 编码一份 query_vector 参与语义项
     query_vector: list[float] | None = None
-    if alpha > 0 and (pq.terms or pq.phrases):
+    if effective_alpha > 0 and (pq.terms or pq.phrases):
         embedder = get_embedder()
         if embedder is not None:
             seed = " ".join(pq.phrases + ([pq.terms] if pq.terms else [])).strip()
@@ -224,7 +240,7 @@ def search(
         pq,
         size=size,
         from_=from_,
-        alpha=alpha,
+        alpha=effective_alpha,
         w1=w1,
         w2=w2,
         w3=w3,
@@ -249,6 +265,7 @@ def search(
                 "kind": pq.kind,
                 "filters": pq.filters,
                 "alpha": alpha,
+                "effective_alpha": effective_alpha,
                 "beta": pb.get("beta", 0.0),
                 "ts": datetime.now(UTC).isoformat(timespec="seconds"),
                 "total": total,

@@ -175,7 +175,24 @@ export const myClicks = (limit = 50) =>
 
 export const snapshotUrl = (doc_id: string) => `${BASE}/snapshot/${doc_id}`
 
-/* ---------- document detail (复用 search 单条) ---------- */
-// 后端没有 /doc/{id}；用 search?q=doc_id:xxx 不通，简单写：先用 search wildcard，
-// 详情页直接拉 ES 索引上的字段不在 MVP 里，M7 详情页用搜索结果传过来即可。
-// 留个 fetch 函数给未来补 GET /doc/{id} 用。
+/* ---------- document detail ---------- */
+
+export interface DocDetail {
+  doc_id: string
+  source?: string
+  url?: string
+  title?: string
+  tag?: string
+  character_name?: string
+  body?: string
+  infobox: Record<string, unknown>
+  popularity?: number
+  pagerank?: number
+  obscurity?: number
+  fetched_at?: string
+  has_snapshot: boolean
+  has_embedding: boolean
+}
+
+export const getDoc = (doc_id: string, body_max = 8000) =>
+  req<DocDetail>(`/doc/${encodeURIComponent(doc_id)}?body_max=${body_max}`)

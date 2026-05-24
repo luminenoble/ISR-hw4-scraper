@@ -111,3 +111,22 @@ class SearchCardsResponse(BaseModel):
     total: int
     took_ms: int
     hits: list[HitCard]
+
+
+class DocDetail(BaseModel):
+    """单文档全字段响应，详情页用。body 来自 ES 索引（已清洗后的纯文本）。"""
+
+    doc_id: str
+    source: str | None = None
+    url: str | None = None
+    title: str | None = None
+    tag: str | None = None
+    character_name: str | None = None
+    body: str | None = None
+    infobox: dict[str, Any] = {}
+    popularity: float | None = None
+    pagerank: float | None = None
+    obscurity: float | None = None
+    fetched_at: str | None = None
+    has_snapshot: bool = False
+    has_embedding: bool = False

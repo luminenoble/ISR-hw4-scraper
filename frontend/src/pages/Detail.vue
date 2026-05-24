@@ -1,32 +1,65 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
-import { computed } from 'vue'
-import { snapshotUrl, search } from '../lib/api'
-import { ref, onMounted } from 'vue'
-import type { Hit } from '../lib/api'
+import { computed, ref, onMounted, watch } from 'vue'
+import { snapshotUrl, search, getDoc } from '../lib/api'
+import type { Hit, DocDetail } from '../lib/api'
 
 const route = useRoute()
 const router = useRouter()
 
 const docId = computed(() => route.params.id as string)
-const title = computed(() => route.query.title as string || '')
-const source = computed(() => route.query.source as string || '')
-const tag = computed(() => route.query.tag as string || '')
-const url = computed(() => route.query.url as string || '')
+// 列表带来的元数据作为占位；详情拉到后以 detail 为准
+const detail = ref<DocDetail | null>(null)
+const loadingDoc = ref(false)
+const docError = ref<string | null>(null)
+
+const title = computed(() => detail.value?.title || (route.query.title as string) || '')
+const source = computed(() => detail.value?.source || (route.query.source as string) || '')
+const tag = computed(() => detail.value?.tag || (route.query.tag as string) || '')
+const url = computed(() => detail.value?.url || (route.query.url as string) || '')
 
 const related = ref<Hit[]>([])
 const loadingRel = ref(false)
 
-onMounted(async () => {
-  // 拉同 source 的相关条目：用 title 去搜，过滤 same source，去掉自己
-  if (!title.value) return
+async function loadDoc() {
+  if (!docId.value) return
+  loadingDoc.value = true
+  docError.value = null
+  try {
+    detail.value = await getDoc(docId.value, 8000)
+  } catch (e: unknown) {
+    detail.value = null
+    docError.value = e instanceof Error ? e.message : '加载失败'
+  } finally {
+    loadingDoc.value = false
+  }
+}
+
+async function loadRelated() {
+  const seed = title.value
+  if (!seed) return
   loadingRel.value = true
   try {
-    const r = await search({ q: title.value, size: 10, source: source.value || undefined, alpha: 0.3 })
+    const r = await search({ q: seed, size: 10, source: source.value || undefined, alpha: 0.3 })
     related.value = r.hits.filter(h => h.doc_id !== docId.value).slice(0, 6)
   } finally {
     loadingRel.value = false
   }
+}
+
+onMounted(async () => {
+  await loadDoc()
+  await loadRelated()
+})
+
+watch(docId, async () => {
+  await loadDoc()
+  await loadRelated()
+})
+
+const infoboxEntries = computed(() => {
+  const ib = detail.value?.infobox || {}
+  return Object.entries(ib).filter(([_, v]) => v != null && String(v).trim() !== '').slice(0, 12)
 })
 
 function openSnapshot() {
@@ -61,12 +94,32 @@ function goRelated(h: Hit) {
       <dl class="meta-list mono">
         <div><dt>doc_id</dt><dd>{{ docId }}</dd></div>
         <div v-if="source"><dt>source</dt><dd>{{ source }}</dd></div>
+        <div v-if="detail?.character_name"><dt>character</dt><dd>{{ detail.character_name }}</dd></div>
         <div v-if="url"><dt>url</dt><dd class="url-cell">{{ url }}</dd></div>
+        <div v-if="detail?.fetched_at"><dt>fetched</dt><dd>{{ detail.fetched_at }}</dd></div>
+        <div v-if="detail?.pagerank != null"><dt>pagerank</dt><dd>{{ detail.pagerank.toExponential(3) }}</dd></div>
+        <div v-if="detail?.obscurity != null"><dt>obscurity</dt><dd>{{ detail.obscurity.toFixed(3) }}</dd></div>
+        <div v-if="detail?.popularity != null"><dt>popularity</dt><dd>{{ detail.popularity }}</dd></div>
       </dl>
 
-      <p class="lede">
-        档案条目快照与原始链接见右侧。完整正文请通过"网页快照"查看，避免直接转贴第三方内容。
-      </p>
+      <div v-if="loadingDoc" class="hint mono">载入正文中…</div>
+      <div v-else-if="docError" class="hint err">⚠ {{ docError }}</div>
+      <template v-else>
+        <section v-if="infoboxEntries.length" class="infobox">
+          <h3>信息框</h3>
+          <hr class="rule" />
+          <dl class="ib mono">
+            <div v-for="[k, v] in infoboxEntries" :key="k"><dt>{{ k }}</dt><dd>{{ v }}</dd></div>
+          </dl>
+        </section>
+
+        <section v-if="detail?.body" class="body-section">
+          <h3>正文</h3>
+          <hr class="rule" />
+          <div class="body-text">{{ detail.body }}</div>
+        </section>
+        <p v-else class="lede">本条目无正文存档，可通过"网页快照"查看原始页面。</p>
+      </template>
     </article>
 
     <aside class="sidebar">
@@ -175,4 +228,26 @@ function goRelated(h: Hit) {
 .badge.small { font-size: 10px; padding: 1px 4px; }
 .rel-title { flex: 1; word-break: break-word; }
 .hint { color: var(--ink-2); font-size: var(--text-sm); }
+.hint.err { color: var(--stamp-rose, #c2185b); }
+.infobox { margin: var(--sp-4) 0 var(--sp-6); }
+.infobox h3, .body-section h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  margin: 0;
+}
+.ib { font-size: var(--text-sm); color: var(--ink-2); margin-top: var(--sp-2); }
+.ib > div { display: grid; grid-template-columns: 140px 1fr; padding: 2px 0; border-bottom: 1px dotted var(--rule); }
+.ib dt { color: var(--ink-2); }
+.ib dd { margin: 0; color: var(--ink); word-break: break-word; }
+.body-section { margin-top: var(--sp-4); }
+.body-text {
+  font-family: var(--font-body, 'Crimson Pro'), Georgia, serif;
+  font-size: var(--text-base);
+  color: var(--ink);
+  line-height: 1.75;
+  margin-top: var(--sp-3);
+  max-width: var(--maxw-reading);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>
