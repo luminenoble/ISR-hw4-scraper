@@ -86,3 +86,28 @@ class ClickRequest(BaseModel):
     doc_id: str
     query: str | None = None
     dwell_ms: int | None = Field(default=None, ge=0)
+
+
+class EventRequest(BaseModel):
+    """通用埋点：响应延迟 / α 调节 / 空结果 / 平均 RR 等。"""
+
+    kind: str = Field(min_length=1, max_length=64)
+    payload: dict[str, Any] = {}
+
+
+# 移动端 / 轻量版搜索响应：去 highlight / 去无关字段，省带宽
+class HitCard(BaseModel):
+    doc_id: str
+    score: float
+    title: str | None = None
+    source: str | None = None
+    tag: str | None = None
+    snippet_plain: str | None = None  # 无 <em> 标签
+
+
+class SearchCardsResponse(BaseModel):
+    query: str
+    kind: str
+    total: int
+    took_ms: int
+    hits: list[HitCard]

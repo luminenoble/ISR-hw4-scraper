@@ -27,7 +27,7 @@ from api.ranking import (
     DEFAULT_W3,
     build_function_score,
 )
-from api.schemas import Hit, SearchResponse
+from api.schemas import Hit, HitCard, SearchCardsResponse, SearchResponse
 
 router = APIRouter(prefix="", tags=["search"])
 
@@ -265,4 +265,50 @@ def search(
         took_ms=took,
         hits=hits,
         filters=pq.filters,
+    )
+
+
+def _strip_em(s: str | None) -> str | None:
+    if not s:
+        return s
+    # 去 <em> 标签但保留文本（移动端自行渲染）
+    return s.replace("<em>", "").replace("</em>", "")
+
+
+@router.get("/search/cards", response_model=SearchCardsResponse)
+def search_cards(
+    q: Annotated[str, Query()],
+    size: int = 10,
+    from_: Annotated[int, Query(alias="from", ge=0)] = 0,
+    source: str | None = Query(None),
+    alpha: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    beta: Annotated[float | None, Query(ge=0.0, le=5.0)] = None,
+    es=Depends(get_es),
+    log_col=Depends(get_log_col),
+    current_user: dict | None = Depends(get_current_user_optional),
+) -> SearchCardsResponse:
+    """精简版 /search，给移动端预留。复用主路径再裁字段。"""
+    full = search(
+        q=q, size=size, from_=from_, source=source, user_id=None,
+        alpha=alpha, beta=beta,
+        w1=DEFAULT_W1, w2=DEFAULT_W2, w3=DEFAULT_W3,
+        es=es, log_col=log_col, current_user=current_user,
+    )
+    cards = [
+        HitCard(
+            doc_id=h.doc_id,
+            score=h.score,
+            title=h.title,
+            source=h.source,
+            tag=h.tag,
+            snippet_plain=_strip_em(h.snippet),
+        )
+        for h in full.hits
+    ]
+    return SearchCardsResponse(
+        query=full.query,
+        kind=full.kind,
+        total=full.total,
+        took_ms=full.took_ms,
+        hits=cards,
     )

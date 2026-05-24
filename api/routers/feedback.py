@@ -13,10 +13,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
-from api.deps import INDEX_NAME, get_current_user_required, get_es, get_users_col
+from datetime import UTC, datetime
+
+from api.deps import (
+    INDEX_NAME,
+    get_current_user_optional,
+    get_current_user_required,
+    get_es,
+    get_log_col,
+    get_users_col,
+)
 from api.personalization import apply_click_update
 from api.routers.auth import _to_profile
-from api.schemas import ClickRequest, UserProfile
+from api.schemas import ClickRequest, EventRequest, UserProfile
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
@@ -55,3 +64,24 @@ def click(
     fresh = users.find_one({"user_id": user["user_id"]})
     assert fresh is not None
     return _to_profile(fresh)
+
+
+@router.post("/event", status_code=204)
+def event(
+    req: EventRequest,
+    current_user: dict | None = Depends(get_current_user_optional),
+    log_col=Depends(get_log_col),
+) -> None:
+    """通用埋点：响应延迟 / α-β 调节 / 空结果 / RR 等。
+
+    匿名用户也允许。落 events 集合（与 query_log 区分）。
+    """
+    db = log_col.database
+    db.events.insert_one(
+        {
+            "kind": req.kind,
+            "payload": req.payload,
+            "user_id": current_user["user_id"] if current_user else None,
+            "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+    )
