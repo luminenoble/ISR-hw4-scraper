@@ -1,7 +1,7 @@
 # ISR-scraper · 同人创作角色背景检索引擎
 
 > 信息存储与检索（ISR）课程作业 · 面向**小说同人创作**的垂直搜索引擎
-> 数据源 Fandom / Wikipedia / Reddit / 文档 · 索引 96,109 文档 · 全栈 0 元自托管
+> 数据源 Fandom / Wikipedia / Reddit / 文档 / **AO3 (Genshin Impact)** · 索引 100,000+ 文档 · 全栈 0 元自托管
 > 设计文档：[`design.md`](./design.md) · 协作上下文：[`CLAUDE.md`](./CLAUDE.md)
 
 ---
@@ -61,17 +61,30 @@
 
 ## 3. 数据规模
 
-| source | 文档数 | embedding 覆盖 |
-|---|---:|---:|
-| reddit | 58,500 | 100% |
-| wiki | 19,661 | 100% |
-| fandom | 17,859 | 100% |
-| document（PDF/docx） | 89 | 100% |
-| **合计** | **96,109** | **100%** |
+| source | 文档数 | embedding 覆盖 | 备注 |
+|---|---:|---:|---|
+| reddit | 58,500 | 100% | arctic-shift API，fanfic 子版 |
+| wiki | 19,661 | 100% | wikipedia-api + Wikidata SPARQL |
+| fandom | 17,859 | 100% | MediaWiki API |
+| ao3 (Genshin Impact) | ~10,000 | 见下 | M9 新增，仅 summary + 元数据 |
+| document（PDF/docx） | 89 | 100% | Tika 解析 |
+| **合计** | **106,000+** | — | |
 
-- PageRank：96,109 节点 / 3.73M 边，离线 networkx 计算后回写 ES
-- 网页快照：每条文档 `data/snapshots/ab/cd/<doc_id>.html.gz`
-- 索引大小：~5.8 GB（含 embedding）
+- PageRank：96,109 节点 / 3.73M 边（不含 AO3，AO3 作品间无内链）
+- 网页快照：除 AO3 外每条文档 `data/snapshots/ab/cd/<doc_id>.html.gz`
+- 索引大小：~6 GB（含 embedding）
+
+### AO3 字段扩展（M9）
+
+| ES 字段 | 类型 | 作用 |
+|---|---|---|
+| `ao3_tags.fandom` / `.relationship` / `.character` / `.freeform` | keyword 数组 | tag 群多值过滤 / facet |
+| `rating` | keyword | G / T / M / E / Not Rated |
+| `language` | keyword | English / 中文 / 日本語 / ... |
+| `word_count` / `kudos` / `bookmarks` / `hits` | integer | 元数据 + popularity 三分量 |
+| `author` | keyword | 作者署名 |
+
+AO3 popularity 公式：`log1p(kudos)·0.6 + log1p(bookmarks)·0.3 + log1p(hits)·0.1`，obscurity = `1/log(popularity+e)` 与 design.md §3.4 对齐。
 
 ---
 
@@ -92,7 +105,22 @@ docker compose up -d
 curl -s http://localhost:9200/_cluster/health
 ```
 
-### 4.3 后端
+### 4.3 抓取 AO3 (Genshin Impact)
+
+```bash
+# 一次性 fan-out 500 页（≈ 10000 条），4 并发对齐 2 req/s
+cd crawler
+nohup scrapy crawl ao3 -a max_pages=500 > ../logs/ao3_genshin.log 2>&1 &
+
+# 完成后灌索引 + embedding
+cd ..
+python -m indexer.build_index --resume
+python -m indexer.embed --where source=ao3
+```
+
+详见 [`docs/sec9-summary.md`](./docs/sec9-summary.md)。
+
+### 4.4 后端
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -105,7 +133,7 @@ uvicorn api.main:app --port 8000
 # → http://127.0.0.1:8000/health  应返回 {"ok": true, "doc_count": 96109}
 ```
 
-### 4.4 前端
+### 4.5 前端
 
 ```bash
 cd frontend
@@ -191,6 +219,7 @@ ISR-scraper/
 | M6 | 用户系统 + 个性化 + 联想 | [sec6](./docs/sec6-summary.md) |
 | M7 | Vue3 前端 + 移动端预埋 | [sec7](./docs/sec7-summary.md) |
 | M8 | 联调 / 评测 / 报告 | [sec8](./docs/sec8-summary.md) |
+| M9 | AO3 (Genshin Impact) 接入 · facet + tag 联想 | [sec9](./docs/sec9-summary.md) |
 
 ---
 

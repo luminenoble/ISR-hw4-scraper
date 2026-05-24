@@ -69,26 +69,71 @@ def _flatten_anchors(anchors: list[Any] | None) -> str:
     return " ".join(parts)
 
 
+def _ao3_fields_from_extra(doc: dict) -> dict[str, Any]:
+    """source=ao3 时从 extra dict 提升专属字段到 ES top-level。
+
+    其余 source 一律返回空 dict，保留索引兼容。
+
+    同时为 AO3 文档预算 pagerank / obscurity：
+        - pagerank = 0（AO3 作品间无超链）
+        - obscurity = 1 / log(popularity + e)，使用 spider 算好的 kudos-加权 popularity
+        - 这样 pagerank.py 之后单独跑不会再覆盖 AO3 这两列（pagerank.py 只更新有内链的 doc）
+    """
+    if doc.get("source") != "ao3":
+        return {}
+    import math
+
+    extra = doc.get("extra") or {}
+    ao3_tags = extra.get("ao3_tags") or {}
+    popularity = float(doc.get("popularity") or 0.0)
+    obscurity = 1.0 / math.log(popularity + math.e)
+    return {
+        "author": extra.get("author"),
+        "rating": extra.get("rating"),
+        "warnings": extra.get("warnings") or [],
+        "language": extra.get("language"),
+        "word_count": int(extra.get("word_count") or 0),
+        "kudos": int(extra.get("kudos") or 0),
+        "bookmarks": int(extra.get("bookmarks") or 0),
+        "hits": int(extra.get("hits") or 0),
+        "ao3_tags": {
+            "fandom": list(ao3_tags.get("fandom") or []),
+            "relationship": list(ao3_tags.get("relationship") or []),
+            "character": list(ao3_tags.get("character") or []),
+            "freeform": list(ao3_tags.get("freeform") or []),
+        },
+        # 直接预算，避免后续单跑 pagerank.py 时漏 AO3
+        "pagerank": 0.0,
+        "obscurity": obscurity,
+    }
+
+
 def mongo_doc_to_es(doc: dict) -> dict:
-    """将 Mongo 端的 PageItem 文档转为 ES bulk action 体。"""
+    """将 Mongo 端的 PageItem 文档转为 ES bulk action 体。
+
+    AO3 文档额外把 extra 里的 rating/kudos/ao3_tags 等提升到 top-level，
+    供前端 facet 与 ranking 的 multi-value tag script 使用。
+    """
+    source = {
+        "doc_id": doc.get("doc_id"),
+        "source": doc.get("source"),
+        "url": doc.get("url"),
+        "tag": doc.get("tag") or "canon",
+        "character_name": doc.get("character_name") or None,
+        "title": doc.get("title") or "",
+        "anchors_text": _flatten_anchors(doc.get("anchors")),
+        "body": doc.get("body_text") or "",
+        "infobox": doc.get("infobox") or {},
+        "popularity": float(doc.get("popularity") or 0.0),
+        "fetched_at": doc.get("fetched_at"),
+        "snapshot_path": doc.get("snapshot_path"),
+    }
+    source.update(_ao3_fields_from_extra(doc))
     return {
         "_op_type": "index",
         "_index": INDEX_NAME,
         "_id": doc["doc_id"],
-        "_source": {
-            "doc_id": doc.get("doc_id"),
-            "source": doc.get("source"),
-            "url": doc.get("url"),
-            "tag": doc.get("tag") or "canon",
-            "character_name": doc.get("character_name") or None,
-            "title": doc.get("title") or "",
-            "anchors_text": _flatten_anchors(doc.get("anchors")),
-            "body": doc.get("body_text") or "",
-            "infobox": doc.get("infobox") or {},
-            "popularity": float(doc.get("popularity") or 0.0),
-            "fetched_at": doc.get("fetched_at"),
-            "snapshot_path": doc.get("snapshot_path"),
-        },
+        "_source": source,
     }
 
 

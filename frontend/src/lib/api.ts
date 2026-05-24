@@ -139,6 +139,8 @@ export function search(params: {
   source?: string
   alpha?: number
   beta?: number
+  rating?: string
+  language?: string
 }) {
   const qs = new URLSearchParams()
   qs.set('q', params.q)
@@ -147,6 +149,8 @@ export function search(params: {
   if (params.source) qs.set('source', params.source)
   if (params.alpha != null) qs.set('alpha', String(params.alpha))
   if (params.beta != null) qs.set('beta', String(params.beta))
+  if (params.rating) qs.set('rating', params.rating)
+  if (params.language) qs.set('language', params.language)
   return req<SearchResponse>(`/search?${qs}`)
 }
 

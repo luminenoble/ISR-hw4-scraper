@@ -18,7 +18,9 @@ const route = useRoute()
 const q = ref('')
 const alpha = ref(0.3)
 const beta = ref(0.5)
-const sources = ref<Record<string, boolean>>({ fandom: true, wiki: true, reddit: true, document: true })
+const sources = ref<Record<string, boolean>>({ fandom: true, wiki: true, reddit: true, document: true, ao3: true })
+const rating = ref('')      // '' = 不过滤；仅对 source=ao3 文档生效
+const language = ref('')    // '' = 不过滤
 
 const suggestions = ref<Suggestion[]>([])
 const suggestVisible = ref(false)
@@ -69,6 +71,8 @@ async function runSearch(resetPage = true) {
       source: buildSourceFilter(),
       alpha: alpha.value,
       beta: beta.value,
+      rating: rating.value || undefined,
+      language: language.value || undefined,
     })
     result.value = r
     trackLatency(q.value, r.took_ms, r.total)
@@ -162,9 +166,13 @@ async function onClickResult(hit: Hit, rank: number) {
         :alpha="alpha"
         :beta="beta"
         :sources="sources"
+        :rating="rating"
+        :language="language"
         @update:alpha="onAlphaChange"
         @update:beta="onBetaChange"
         @update:sources="onSourcesChange"
+        @update:rating="(v: string) => { rating = v; runSearch() }"
+        @update:language="(v: string) => { language = v; runSearch() }"
       />
     </div>
 

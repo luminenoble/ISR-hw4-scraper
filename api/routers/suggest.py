@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Annotated, Any, Literal
 
@@ -46,7 +47,7 @@ Q_MAX_LEN = 80
 class Suggestion(BaseModel):
     text: str
     score: float
-    kind: Literal["history", "title", "semantic"]
+    kind: Literal["history", "title", "semantic", "tag"]
     doc_id: str | None = None
 
 
@@ -112,6 +113,75 @@ def _path_a_title(q: str, es, limit: int = 20) -> list[Suggestion]:
                 score=(h["_score"] or 0.0) / top,  # 同批 max-norm
                 kind="title",
                 doc_id=src.get("doc_id"),
+            )
+        )
+    return out
+
+
+def _ci_prefix_pattern(q: str) -> str:
+    """把 q 转成 Lucene 大小写不敏感的前缀 regex。
+
+    例：``Slow`` → ``[sS][lL][oO][wW].*``。Lucene flavor 不支持 ``(?i)``，
+    用字符类是兼容性最稳的写法。非字母字符（空格 / 标点 / 中文）原样保留 + 转义。
+    """
+    out_chars: list[str] = []
+    for c in q:
+        if c.isalpha() and c.isascii():
+            out_chars.append(f"[{c.lower()}{c.upper()}]")
+        elif c in '\\.*+?()[]{}|^$':
+            out_chars.append("\\" + c)
+        else:
+            out_chars.append(c)
+    return "".join(out_chars) + ".*"
+
+
+def _path_a_tag(q: str, es, limit: int = 10) -> list[Suggestion]:
+    """ES terms aggregation 在 ao3_tags.freeform 上做前缀匹配 + 频次排序。
+
+    比起 completion suggester 不用 reindex；agg 走 doc_count 自带"热度"排序。
+    AO3 freeform tag 大小写混用（"Slow Burn" / "slow burn (kind of)"），用 CI 字符类匹配。
+    """
+    if not q:
+        return []
+    q_lower = q.lower()
+    body = {
+        "size": 0,
+        # prefix query 用 case_insensitive 把 candidate 集召回到 docs 里
+        "query": {
+            "prefix": {
+                "ao3_tags.freeform": {"value": q_lower, "case_insensitive": True}
+            }
+        },
+        "aggs": {
+            "tags": {
+                "terms": {
+                    "field": "ao3_tags.freeform",
+                    "size": limit * 3,
+                    "include": _ci_prefix_pattern(q),
+                }
+            }
+        },
+    }
+    try:
+        resp = es.search(index=INDEX_NAME, body=body)
+    except Exception as e:
+        logger.warning(f"suggest: tag agg failed ({e})")
+        return []
+    buckets = resp.get("aggregations", {}).get("tags", {}).get("buckets", [])
+    if not buckets:
+        return []
+    top = buckets[0]["doc_count"] or 1
+    out: list[Suggestion] = []
+    for b in buckets[:limit]:
+        text = b["key"]
+        if text.lower() == q_lower:
+            continue
+        out.append(
+            Suggestion(
+                text=text,
+                # max-norm 到 [0,1]
+                score=min(1.0, 0.4 + 0.6 * (b["doc_count"] / top)),
+                kind="tag",
             )
         )
     return out
@@ -212,10 +282,13 @@ def suggest(
     q_clean = q.strip()[:Q_MAX_LEN]
     a_hist = _path_a_history(q_clean, log_col)
     a_title = _path_a_title(q_clean, es)
+    a_tag = _path_a_tag(q_clean, es)
     b_sem = _path_b_semantic(q_clean, es) if alpha > 0 else []
 
     # 降级：α>0 但语义路径没结果（embedder 未就绪 / 字段缺失） → 退化为纯 A 路，
     # 否则 α=1 时整个结果会被 (1-α)=0 抹平。
     effective_alpha = alpha if b_sem else 0.0
-    merged = _merge_by_alpha(a_hist, a_title, b_sem, alpha=effective_alpha, size=size)
+    merged = _merge_by_alpha(
+        a_hist + a_tag, a_title, b_sem, alpha=effective_alpha, size=size
+    )
     return SuggestResponse(q=q_clean, alpha=alpha, suggestions=merged)

@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps<{
   alpha: number
   beta: number
   sources: Record<string, boolean>
+  rating?: string                    // '' 表示不过滤
+  language?: string                  // '' 表示不过滤
 }>()
 
 const emit = defineEmits<{
   (e: 'update:alpha', v: number): void
   (e: 'update:beta', v: number): void
   (e: 'update:sources', v: Record<string, boolean>): void
+  (e: 'update:rating', v: string): void
+  (e: 'update:language', v: string): void
 }>()
 
 const open = ref(false)
 
-const SOURCES = ['fandom', 'wiki', 'reddit', 'document'] as const
+const SOURCES = ['fandom', 'wiki', 'reddit', 'document', 'ao3'] as const
+const RATINGS = ['', 'General Audiences', 'Teen And Up Audiences', 'Mature', 'Explicit', 'Not Rated'] as const
+const LANGUAGES = ['', 'English', '中文-普通话 國語', 'Español', '日本語', '한국어', 'Français'] as const
 
 function onAlpha(e: Event) {
   emit('update:alpha', Number((e.target as HTMLInputElement).value))
@@ -26,6 +32,17 @@ function onBeta(e: Event) {
 function toggleSrc(s: string) {
   emit('update:sources', { ...props.sources, [s]: !props.sources[s] })
 }
+function onRating(e: Event) {
+  emit('update:rating', (e.target as HTMLSelectElement).value)
+}
+function onLang(e: Event) {
+  emit('update:language', (e.target as HTMLSelectElement).value)
+}
+// AO3 facet 仅在勾选 ao3 source 或全 source 都关时显示，避免 wiki-only 用户看到无意义控件
+const showAo3Filters = computed(() => {
+  if (props.sources.ao3) return true
+  return Object.values(props.sources).every(v => !v)
+})
 
 // 同步外部默认值变化时不强制展开
 watch(() => [props.alpha, props.beta], () => {}, { immediate: true })
@@ -84,6 +101,27 @@ watch(() => [props.alpha, props.beta], () => {}, { immediate: true })
           <label v-for="s in SOURCES" :key="s">
             <input type="checkbox" :checked="sources[s]" @change="toggleSrc(s)" />
             <span class="mono">{{ s }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div v-if="showAo3Filters" class="row">
+        <div class="row-head">
+          <span class="hint">AO3 facet</span>
+          <span class="val mono">同人作品过滤</span>
+        </div>
+        <div class="facet-row">
+          <label class="facet">
+            <span class="mono">rating</span>
+            <select :value="rating || ''" @change="onRating">
+              <option v-for="r in RATINGS" :key="r" :value="r">{{ r || '— 全部 —' }}</option>
+            </select>
+          </label>
+          <label class="facet">
+            <span class="mono">language</span>
+            <select :value="language || ''" @change="onLang">
+              <option v-for="l in LANGUAGES" :key="l" :value="l">{{ l || '— 全部 —' }}</option>
+            </select>
           </label>
         </div>
       </div>
@@ -180,5 +218,23 @@ watch(() => [props.alpha, props.beta], () => {}, { immediate: true })
   accent-color: var(--ink-blue);
   width: 16px;
   height: 16px;
+}
+.facet-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+.facet {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+}
+.facet select {
+  padding: 4px 6px;
+  font-family: var(--font-body);
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
 }
 </style>

@@ -104,6 +104,9 @@ def build_function_score(
         params["pref_tags"] = pref_tags or {}
         # ES Painless 把 List 暴露为可调用 .contains() 的对象
         params["click_set"] = click_set or []
+        # 单值 tag（canon/fanon/meta/crossover）+ 多值 ao3_tags.freeform 均参与匹配。
+        # AO3 文档每条 freeform tag 命中加分（封顶避免长 tag 列表分数失控）；
+        # 普通 wiki/fandom/reddit 文档只走单值 tag 路径，行为与 M8 完全一致。
         personal_src = """
             double ps = 0.0;
             if (doc.containsKey('source') && doc['source'].size() > 0) {
@@ -117,6 +120,17 @@ def build_function_score(
                 if (((Map)params.pref_tags).containsKey(t)) {
                     ps += params.pb_w_tag * ((Number)((Map)params.pref_tags).get(t)).doubleValue();
                 }
+            }
+            // AO3 freeform tag 多值遍历；每条命中按 pref_tags 权重叠加；总贡献封顶 1.0
+            if (doc.containsKey('ao3_tags.freeform') && doc['ao3_tags.freeform'].size() > 0) {
+                double ff_sum = 0.0;
+                for (def ft : doc['ao3_tags.freeform']) {
+                    if (((Map)params.pref_tags).containsKey(ft)) {
+                        ff_sum += ((Number)((Map)params.pref_tags).get(ft)).doubleValue();
+                    }
+                }
+                if (ff_sum > 1.0) ff_sum = 1.0;
+                ps += params.pb_w_tag * ff_sum;
             }
             if (doc.containsKey('doc_id') && doc['doc_id'].size() > 0) {
                 String did = doc['doc_id'].value;

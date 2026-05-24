@@ -79,10 +79,15 @@ def build_graph(col) -> tuple[nx.DiGraph, int]:
 
     返回 (图, 命中的内链数)。
     """
-    logger.info("pass 1: building url→doc_id index ...")
+    logger.info("pass 1: building url→doc_id index (excluding source=ao3) ...")
     url_to_id: dict[str, str] = {}
     docs_meta: list[tuple[str, str, list]] = []
-    for d in tqdm(col.find({}, {"doc_id": 1, "url": 1, "anchors": 1}), desc="scan"):
+    # AO3 文档间无内链；自身 popularity 已由 spider 算 kudos+bookmarks+hits，
+    # 这里跳过避免被 in-degree 覆盖回 0
+    for d in tqdm(
+        col.find({"source": {"$ne": "ao3"}}, {"doc_id": 1, "url": 1, "anchors": 1}),
+        desc="scan",
+    ):
         did = d.get("doc_id")
         url = d.get("url") or ""
         if not did or not url:

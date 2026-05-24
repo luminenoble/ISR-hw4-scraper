@@ -64,7 +64,23 @@
         "dims": 1024,
         "index": true,
         "similarity": "cosine"
-      }
+      },
+      "ao3_tags": {
+        "properties": {
+          "fandom":       { "type": "keyword" },
+          "relationship": { "type": "keyword" },
+          "character":    { "type": "keyword" },
+          "freeform":     { "type": "keyword" }
+        }
+      },
+      "rating":     { "type": "keyword" },
+      "warnings":   { "type": "keyword" },
+      "language":   { "type": "keyword" },
+      "word_count": { "type": "integer" },
+      "kudos":      { "type": "integer" },
+      "bookmarks":  { "type": "integer" },
+      "hits":       { "type": "integer" },
+      "author":     { "type": "keyword" }
     }
   }
 }

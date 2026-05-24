@@ -187,6 +187,8 @@ def search(
     size: int = 10,
     from_: Annotated[int, Query(alias="from", ge=0)] = 0,
     source: str | None = Query(None, description="显式过滤 source（document 等）"),
+    rating: str | None = Query(None, description="AO3 rating 过滤（如 'Mature'）"),
+    language: str | None = Query(None, description="AO3 language 过滤（如 'English'）"),
     user_id: str | None = Query(None, description="用户 id，用于查询日志"),
     alpha: Annotated[float | None, Query(ge=0.0, le=1.0, description="发散度 0=纯 BM25+PR / 1=纯语义；缺省取用户档案 default_alpha")] = None,
     beta: Annotated[float | None, Query(ge=0.0, le=5.0, description="个性化总权重；缺省取用户档案 default_beta，匿名为 0")] = None,
@@ -200,6 +202,10 @@ def search(
     pq = parse(q)
     if source:
         pq.filters["source"] = source
+    if rating:
+        pq.filters["rating"] = rating
+    if language:
+        pq.filters["language"] = language
 
     # 参数优先级：URL > 用户档案 > 全局默认
     if alpha is None:
