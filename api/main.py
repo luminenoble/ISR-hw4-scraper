@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.deps import INDEX_NAME, get_es, lifespan
-from api.routers import log, search, snapshot
+from api.routers import auth, feedback, log, search, snapshot, suggest
 
 app = FastAPI(
     title="ISR Search API",
@@ -24,13 +24,16 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["*"],
 )
 
 app.include_router(search.router)
 app.include_router(snapshot.router)
 app.include_router(log.router)
+app.include_router(auth.router)
+app.include_router(feedback.router)
+app.include_router(suggest.router)
 
 
 @app.get("/health")

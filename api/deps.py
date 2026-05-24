@@ -8,12 +8,15 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import pymongo
 from dotenv import load_dotenv
 from elasticsearch import Elasticsearch
+from fastapi import Header, HTTPException, status
 from loguru import logger
+
+from api.security import decode_token
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -86,6 +89,8 @@ async def lifespan(app: FastAPI):
         logger.error("ES ping failed at startup")
     db = state.mongo[os.getenv("MONGO_DB", "isr")]
     db.query_log.create_index([("user_id", 1), ("ts", -1)])
+    db.users.create_index("user_id", unique=True)
+    db.users.create_index("email", unique=True)
     logger.info("api started; es + mongo connected")
     try:
         yield
@@ -110,3 +115,50 @@ def get_pages_col():
 
 def get_log_col():
     return state.mongo[os.getenv("MONGO_DB", "isr")]["query_log"]
+
+
+def get_users_col():
+    return state.mongo[os.getenv("MONGO_DB", "isr")]["users"]
+
+
+def _parse_bearer(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    parts = authorization.split(None, 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1].strip()
+
+
+def get_current_user_optional(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict | None:
+    """有效 token → 返回 user 文档；无 / 无效 token → 返回 None（匿名）。
+
+    不抛错，因为搜索接口允许匿名访问；β 路径只在登录时启用。
+    """
+    token = _parse_bearer(authorization)
+    if not token:
+        return None
+    payload = decode_token(token)
+    if not payload:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    user = get_users_col().find_one({"user_id": user_id})
+    return user
+
+
+def get_current_user_required(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """必须登录的接口用；token 缺失 / 失效 → 401。"""
+    user = get_current_user_optional(authorization)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or missing token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user

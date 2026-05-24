@@ -11,9 +11,22 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
-from api.deps import INDEX_NAME, get_embedder, get_es, get_log_col
+from api.deps import (
+    INDEX_NAME,
+    get_current_user_optional,
+    get_embedder,
+    get_es,
+    get_log_col,
+)
+from api.personalization import boost_params_for
 from api.query_parser import ParsedQuery, parse
-from api.ranking import DEFAULT_W1, DEFAULT_W2, DEFAULT_W3, build_function_score
+from api.ranking import (
+    DEFAULT_BETA,
+    DEFAULT_W1,
+    DEFAULT_W2,
+    DEFAULT_W3,
+    build_function_score,
+)
 from api.schemas import Hit, SearchResponse
 
 router = APIRouter(prefix="", tags=["search"])
@@ -96,6 +109,10 @@ def build_es_dsl(
     w2: float,
     w3: float,
     query_vector: list[float] | None,
+    beta: float = 0.0,
+    pref_sources: dict[str, float] | None = None,
+    pref_tags: dict[str, float] | None = None,
+    click_set: list[str] | None = None,
 ) -> dict[str, Any]:
     """拼最终 ES 查询体：内层 BM25 + 外层 function_score 公式打分。"""
     inner = _build_inner_query(pq)
@@ -108,6 +125,10 @@ def build_es_dsl(
         w3=w3,
         query_vector=query_vector,
         use_embedding=use_emb,
+        beta=beta,
+        pref_sources=pref_sources,
+        pref_tags=pref_tags,
+        click_set=click_set,
     )
     return {
         "from": from_,
@@ -152,16 +173,38 @@ def search(
     from_: Annotated[int, Query(alias="from", ge=0)] = 0,
     source: str | None = Query(None, description="显式过滤 source（document 等）"),
     user_id: str | None = Query(None, description="用户 id，用于查询日志"),
-    alpha: Annotated[float, Query(ge=0.0, le=1.0, description="发散度 0=纯 BM25+PR / 1=纯语义")] = 0.0,
+    alpha: Annotated[float | None, Query(ge=0.0, le=1.0, description="发散度 0=纯 BM25+PR / 1=纯语义；缺省取用户档案 default_alpha")] = None,
+    beta: Annotated[float | None, Query(ge=0.0, le=5.0, description="个性化总权重；缺省取用户档案 default_beta，匿名为 0")] = None,
     w1: float = DEFAULT_W1,
     w2: float = DEFAULT_W2,
     w3: float = DEFAULT_W3,
     es=Depends(get_es),
     log_col=Depends(get_log_col),
+    current_user: dict | None = Depends(get_current_user_optional),
 ) -> SearchResponse:
     pq = parse(q)
     if source:
         pq.filters["source"] = source
+
+    # 参数优先级：URL > 用户档案 > 全局默认
+    if alpha is None:
+        alpha = float(current_user.get("default_alpha", 0.0)) if current_user else 0.0
+    if beta is None:
+        beta = float(current_user.get("default_beta", DEFAULT_BETA)) if current_user else 0.0
+
+    # 登录用户 → 抽 PersonalBoost kwargs；匿名 → beta=0
+    pb = boost_params_for(current_user) if beta > 0 else {"beta": 0.0}
+    # URL 显式 beta 覆盖档案的 default_beta，但 source/tag/click 集仍取自档案
+    pb["beta"] = beta if current_user else 0.0
+    if not current_user:
+        pb.pop("pref_sources", None)
+        pb.pop("pref_tags", None)
+        pb.pop("click_set", None)
+    # 若 URL 强制 beta=0 但档案启用，要清掉 boost 字段免 script 误开
+    if pb["beta"] <= 0:
+        pb = {"beta": 0.0}
+
+    user_id = current_user["user_id"] if current_user else user_id
 
     # alpha > 0 且模型已就绪时，对 q 编码一份 query_vector 参与语义项
     query_vector: list[float] | None = None
@@ -186,6 +229,10 @@ def search(
         w2=w2,
         w3=w3,
         query_vector=query_vector,
+        beta=pb.get("beta", 0.0),
+        pref_sources=pb.get("pref_sources"),
+        pref_tags=pb.get("pref_tags"),
+        click_set=pb.get("click_set"),
     )
 
     resp = es.search(index=INDEX_NAME, body=dsl)
@@ -202,6 +249,7 @@ def search(
                 "kind": pq.kind,
                 "filters": pq.filters,
                 "alpha": alpha,
+                "beta": pb.get("beta", 0.0),
                 "ts": datetime.now(UTC).isoformat(timespec="seconds"),
                 "total": total,
                 "result_ids": [h.doc_id for h in hits],
