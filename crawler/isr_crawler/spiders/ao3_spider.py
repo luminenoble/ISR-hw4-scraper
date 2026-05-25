@@ -281,14 +281,17 @@ class AO3Spider(scrapy.Spider):
         if not works:
             # AO3 翻到没结果的页就返回空 ul；fan-out 模式下后续页同样可能空，不停整个 spider
             self.logger.debug(f"[ao3] empty page {page}")
-            return
+            # 用 break 出空循环代替 return：让 Scrapy 的 AST 启发式（is_generator_with_return_value）
+            # 不会在任何 Python 版本上误报"return with value"
+            blurbs: list = []
+        else:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(response.text, "lxml")
+            blurbs = soup.select("li.work.blurb.group")
 
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(response.text, "lxml")
-
-        for blurb in soup.select("li.work.blurb.group"):
+        for blurb in blurbs:
             if self.limit is not None and self._yielded >= self.limit:
-                return
+                break
             parsed = parse_work_blurb(blurb, source_url=response.url)
             if parsed is None:
                 continue
