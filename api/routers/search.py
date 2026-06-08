@@ -311,8 +311,12 @@ def search_cards(
     current_user: dict | None = Depends(get_current_user_optional),
 ) -> SearchCardsResponse:
     """精简版 /search，给移动端预留。复用主路径再裁字段。"""
+    # 必须显式传 rating/language=None：作为普通函数直调 search() 时，未传的
+    # 参数会取 FastAPI 的 Query(None) 哨兵对象（真值），导致 `if rating:` 误判
+    # 把 Query(None) 塞进 ES term 过滤器 → SerializationError 500。
     full = search(
-        q=q, size=size, from_=from_, source=source, user_id=None,
+        q=q, size=size, from_=from_, source=source,
+        rating=None, language=None, user_id=None,
         alpha=alpha, beta=beta,
         w1=DEFAULT_W1, w2=DEFAULT_W2, w3=DEFAULT_W3,
         es=es, log_col=log_col, current_user=current_user,
